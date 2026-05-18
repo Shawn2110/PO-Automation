@@ -1,0 +1,15 @@
+# Required
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6
+PyMuPDF>=1.24       # PDF → image rasterization
+
+# OCR engines — install at least one.
+# Tesseract is easier on Windows and python 3.13/3.14. PaddleOCR is the production target.
+pytesseract>=0.3.10
+Pillow>=10.0
+
+# Optional: production-target OCR. Only installs cleanly on Python 3.8–3.12.
+# Comment out below if your Python version is too new and use pytesseract only.
+# paddleocr>=2.7.0
+# paddlepaddle>=2.6.0
