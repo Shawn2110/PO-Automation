@@ -59,14 +59,25 @@ export function runExtraction(blocks: Block[], template: TemplateLabels): Extrac
   return { invoiceDate, invoiceNumber, clientName, amountBeforeGst, amountAfterGst, gstPct, gstMismatch, overallConfidence, needsReview };
 }
 
-// Best-effort vendor name fuzzy guess for invoices without GST detection.
+// Words that commonly appear at the top of an invoice but aren't the vendor name.
+const HEADER_NOISE = /^(tax\s+invoice|invoice|bill\s+of\s+supply|proforma\s+invoice|debit\s+note|credit\s+note|gstin|original|duplicate|cash\s+memo)\b/i;
+
+// Best-effort vendor name guess from OCR blocks. Picks the topmost reasonable-length
+// text that doesn't look like generic invoice header noise.
 export function pickVendorNameCandidate(blocks: Block[]): string | null {
-  // Strategy: in absence of GST, the top-of-page largest-confidence text is usually vendor name.
-  const top = [...blocks]
-    .filter((b) => b.text.trim().length >= 4 && b.text.trim().length <= 60)
+  const candidates = [...blocks]
+    .filter((b) => {
+      const t = b.text.trim();
+      if (t.length < 4 || t.length > 80) return false;
+      if (HEADER_NOISE.test(t)) return false;
+      // Skip lines that are mostly digits (account numbers, dates, GST numbers)
+      const digits = (t.match(/\d/g) ?? []).length;
+      if (digits / t.length > 0.4) return false;
+      return true;
+    })
     .sort((a, b) => a.bbox[1] - b.bbox[1])
-    .slice(0, 10);
-  return top[0]?.text.trim() ?? null;
+    .slice(0, 5);
+  return candidates[0]?.text.trim() ?? null;
 }
 
 export { GST_PATTERN } from "./types";

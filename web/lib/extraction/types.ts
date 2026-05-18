@@ -27,5 +27,8 @@ export type ExtractionResult = {
   needsReview: boolean;
 };
 
-export const GST_PATTERN = /\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[0-9]{1}[A-Z]{1}\b/;
+// GSTIN: 15 chars — state(2) + PAN(10: 5 letters + 4 digits + 1 letter) + entity(1)
+// + "Z" + checksum(1 alphanumeric). The agent.md/prd.md spec had only 14 chars
+// (missing the trailing checksum), which silently rejected real-world GSTs.
+export const GST_PATTERN = /\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9][A-Z][A-Z0-9]\b/;
 export const LOW_CONFIDENCE = 0.7;
