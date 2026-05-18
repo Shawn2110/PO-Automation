@@ -1,0 +1,41 @@
+# Node / Next.js
+node_modules/
+.next/
+out/
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+
+# Prisma — generated client + local SQLite DB
+web/prisma/*.db
+web/prisma/*.db-journal
+web/prisma/migrations/dev.db
+web/app/generated/
+
+# Env (secrets live here)
+.env
+.env.local
+.env.*.local
+web/.env
+ocr-service/.env
+
+# Uploaded PDFs
+web/uploads/
+uploads/
+
+# Python venv + caches
+ocr-service/.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local config
+.claude/
+
