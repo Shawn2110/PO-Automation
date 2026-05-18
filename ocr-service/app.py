@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import time
+import traceback
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -26,10 +27,22 @@ class ExtractRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {
-        "ok": True,
-        "engine": ocr_engine.active_engine(),
-    }
+    """Reports which engine is wired up and whether its binary is reachable."""
+    engine = ocr_engine.active_engine()
+    info = {"ok": True, "engine": engine}
+
+    if engine == "tesseract":
+        try:
+            import pytesseract
+            info["tesseract_cmd"] = pytesseract.pytesseract.tesseract_cmd
+            info["tesseract_version"] = str(pytesseract.get_tesseract_version())
+        except Exception as e:
+            info["ok"] = False
+            info["error"] = f"Tesseract binary not reachable: {e}. " \
+                            "Install from https://github.com/UB-Mannheim/tesseract/wiki " \
+                            "or set tesseract_cmd in ocr_engine.py."
+
+    return info
 
 
 @app.post("/extract")
@@ -48,7 +61,13 @@ def extract(req: ExtractRequest):
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"OCR failed: {e}")
+        # Surface the real error to the caller so the Next.js UI can show it.
+        tb = traceback.format_exc()
+        print(f"[extract] FAILED for {path}:\n{tb}", flush=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"{type(e).__name__}: {e}",
+        )
 
     result["duration_ms"] = int((time.monotonic() - start) * 1000)
     return result

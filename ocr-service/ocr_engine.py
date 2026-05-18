@@ -9,6 +9,8 @@ Block dict shape: { "text": str, "bbox": [x1, y1, x2, y2], "confidence": float }
 from __future__ import annotations
 
 import io
+import os
+import sys
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
@@ -46,6 +48,22 @@ if _paddle is None:
         from PIL import Image  # type: ignore
         _tesseract = pytesseract
         _pil = Image
+
+        # On Windows, the tesseract binary isn't on PATH by default after an
+        # installer install. Probe the common locations so users don't have to
+        # edit PATH for the demo to work.
+        if sys.platform == "win32":
+            candidates = [
+                r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tesseract-OCR\tesseract.exe"),
+                os.path.expandvars(r"%USERPROFILE%\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"),
+            ]
+            for path in candidates:
+                if os.path.isfile(path):
+                    pytesseract.pytesseract.tesseract_cmd = path
+                    break
+
         _active_engine = "tesseract"
     except Exception:
         _tesseract = None

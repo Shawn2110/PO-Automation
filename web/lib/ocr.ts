@@ -25,7 +25,13 @@ export async function runOcr(pdfPath: string): Promise<OcrResponse> {
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      throw new OcrError(`OCR service returned ${res.status}: ${detail.slice(0, 200)}`);
+      // FastAPI returns JSON like { "detail": "TesseractNotFoundError: tesseract is not installed…" }
+      let pretty = detail.slice(0, 400);
+      try {
+        const parsed = JSON.parse(detail);
+        if (parsed?.detail) pretty = String(parsed.detail).slice(0, 400);
+      } catch { /* not JSON, use raw text */ }
+      throw new OcrError(`OCR service returned ${res.status}: ${pretty}`);
     }
     const data = await res.json() as {
       blocks: Block[];

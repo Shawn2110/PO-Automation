@@ -2,6 +2,20 @@ import { NextResponse, type NextRequest } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 
+async function lastErrorMessage(invoiceId: string): Promise<string> {
+  const audit = await prisma.auditLog.findFirst({
+    where: { invoiceId, action: "error" },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!audit?.metadata) return "Processing failed — see audit log";
+  try {
+    const meta = JSON.parse(audit.metadata) as { message?: string };
+    return meta.message ?? "Processing failed — see audit log";
+  } catch {
+    return "Processing failed — see audit log";
+  }
+}
+
 // Maps status → stage index (0..4) the UI uses to drive its progress animation.
 const STAGE: Record<string, number> = {
   queued: 0,
@@ -39,6 +53,6 @@ export async function GET(
       amountBeforeGst: inv.amountBeforeGst,
       amountAfterGst: inv.amountAfterGst,
     },
-    error: inv.status === "error" ? "Processing failed — see audit log" : undefined,
+    error: inv.status === "error" ? await lastErrorMessage(id) : undefined,
   });
 }
