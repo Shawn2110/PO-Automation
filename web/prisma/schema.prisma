@@ -1,0 +1,115 @@
+// PO Automation — Prisma schema
+// Demo: SQLite. Upgrade path: change provider to "postgresql" + DATABASE_URL.
+// Mirrors docs/prd.md data models, with SQLite-friendly type substitutions.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────────────────────────────────────────
+//  Enums (SQLite stores as TEXT)
+// ──────────────────────────────────────────────────────────────
+// role:    admin | accountant | viewer
+// status:  queued | processing | processed | needs_review | needs_mapping | error
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         String    // admin | accountant | viewer
+  isActive     Boolean   @default(true)
+  lastLogin    DateTime?
+  createdAt    DateTime  @default(now())
+
+  uploadedInvoices  Invoice[] @relation("UploadedBy")
+  editedInvoices    Invoice[] @relation("EditedBy")
+  createdTemplates  VendorTemplate[]
+  auditEntries      AuditLog[]
+}
+
+model Vendor {
+  id           String    @id @default(cuid())
+  name         String
+  gstNumber    String    @unique
+  invoiceCount Int       @default(0)
+  hasTemplate  Boolean   @default(false)
+  lastSeen     DateTime?
+  createdAt    DateTime  @default(now())
+
+  template VendorTemplate?
+  invoices Invoice[]
+}
+
+model VendorTemplate {
+  id                   String   @id @default(cuid())
+  vendorId             String   @unique
+  invoiceDateLabel     String?
+  invoiceNumberLabel   String?
+  clientNameLabel      String?
+  amountBeforeGstLabel String?
+  amountAfterGstLabel  String?
+  bboxHints            String?  // JSON-encoded { field: [x1,y1,x2,y2] }
+  createdById          String?
+  updatedAt            DateTime @updatedAt
+  createdAt            DateTime @default(now())
+
+  vendor    Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdById], references: [id], onDelete: SetNull)
+}
+
+model Invoice {
+  id              String    @id @default(cuid())
+  invoiceNumber   String
+  vendorId        String?
+  invoiceDate     DateTime?
+  clientName      String?
+  amountBeforeGst Float?
+  amountAfterGst  Float?
+  // gstAmount computed in app layer (after - before)
+  gstPct          Float?
+  status          String    @default("queued") // see enum-as-string list above
+  ocrConfidence   Float?
+  gstMismatch     Boolean   @default(false)
+  pdfPath         String
+  uploadedById    String?
+  uploadedAt      DateTime  @default(now())
+  lastEditedById  String?
+  lastEditedAt    DateTime?
+
+  // Extraction metadata — only meaningful while needs_mapping
+  ocrBlocks       String?   // JSON-encoded [{ text, bbox, confidence }]
+
+  vendor       Vendor?    @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  uploadedBy   User?      @relation("UploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  lastEditedBy User?      @relation("EditedBy",   fields: [lastEditedById], references: [id], onDelete: SetNull)
+  auditEntries AuditLog[]
+
+  @@unique([invoiceNumber, vendorId])
+  @@index([status])
+  @@index([vendorId])
+  @@index([uploadedAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  invoiceId String?
+  userId    String?
+  action    String   // extracted | corrected | template_created | template_updated | ...
+  field     String?
+  oldValue  String?
+  newValue  String?
+  metadata  String?  // JSON-encoded
+  createdAt DateTime @default(now())
+
+  invoice Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  user    User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([invoiceId])
+  @@index([createdAt])
+}
