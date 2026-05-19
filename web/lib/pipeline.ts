@@ -6,6 +6,7 @@ import { runOcr } from "@/lib/ocr";
 import { runExtraction, pickVendorNameCandidate } from "@/lib/extraction/extract";
 import { GST_PATTERN } from "@/lib/extraction/types";
 import type { Block } from "@/lib/extraction/types";
+import { autoDetectLabels, allLabelsFound, countLabelsFound } from "@/lib/extraction/autodetect";
 
 export type PipelineResult = {
   invoiceId: string;
@@ -57,7 +58,55 @@ export async function runPipeline(invoiceId: string): Promise<PipelineResult> {
       }
     }
 
-    // ── Stage 4: Template matching ────────────────────────────
+    // ── Stage 4a: Template auto-detect ────────────────────────
+    // If we have a vendor but no saved template, try to identify the five
+    // canonical labels from a built-in synonyms list. If we find all of them,
+    // save the result as the vendor's template and proceed to normal
+    // extraction. Otherwise fall through to Stage 4b (manual mapping).
+    if (vendor && !vendor.hasTemplate) {
+      const autoLabels = autoDetectLabels(blocks);
+      const foundCount = countLabelsFound(autoLabels);
+
+      if (allLabelsFound(autoLabels)) {
+        const created = await prisma.vendorTemplate.upsert({
+          where: { vendorId: vendor.id },
+          create: {
+            vendorId: vendor.id,
+            invoiceDateLabel:     autoLabels.invoiceDate     ?? null,
+            invoiceNumberLabel:   autoLabels.invoiceNumber   ?? null,
+            clientNameLabel:      autoLabels.clientName      ?? null,
+            amountBeforeGstLabel: autoLabels.amountBeforeGst ?? null,
+            amountAfterGstLabel:  autoLabels.amountAfterGst  ?? null,
+          },
+          update: {},
+        });
+        await prisma.vendor.update({ where: { id: vendor.id }, data: { hasTemplate: true } });
+        await prisma.auditLog.create({
+          data: {
+            invoiceId,
+            action: "template_auto_detected",
+            metadata: JSON.stringify({ vendorId: vendor.id, labels: autoLabels, engine: ocr.engine }),
+          },
+        });
+        // Re-shape the vendor object so the existing extraction path picks up the new template.
+        vendor = { ...vendor, hasTemplate: true, template: created };
+      } else {
+        await prisma.auditLog.create({
+          data: {
+            invoiceId,
+            action: "template_auto_detect_partial",
+            metadata: JSON.stringify({
+              vendorId: vendor.id,
+              foundCount,
+              labels: autoLabels,
+              engine: ocr.engine,
+            }),
+          },
+        });
+      }
+    }
+
+    // ── Stage 4b: Manual mapping fallback ─────────────────────
     if (!vendor || !vendor.template || !vendor.hasTemplate) {
       // Persist OCR blocks so the template-mapping UI has labels to pick from.
       await prisma.invoice.update({

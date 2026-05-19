@@ -1,16 +1,16 @@
 import { type Block, type CanonicalField, type ExtractedField, type ExtractionResult, type TemplateLabels, LOW_CONFIDENCE } from "./types";
-import { findLabelBlock, extractAdjacentValue } from "./match";
+import { findLabelBlock, extractValueForMatch } from "./match";
 import { parseAmount, parseDate, deriveGstPct, snapToStandardRate, isGstMismatch } from "./parse";
 
 function extractRaw(blocks: Block[], labelText: string | null | undefined): { raw: string; confidence: number } | null {
   if (!labelText) return null;
   const m = findLabelBlock(blocks, labelText);
   if (!m) return null;
-  const value = extractAdjacentValue(m.block, blocks);
-  if (!value) return null;
+  const raw = extractValueForMatch(m, blocks);
+  if (!raw) return null;
   return {
-    raw: value.text.trim(),
-    confidence: Math.min(m.confidence, value.confidence),
+    raw,
+    confidence: Math.min(m.confidence, m.block.confidence),
   };
 }
 
