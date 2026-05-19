@@ -1,4 +1,4 @@
-# PO Automation — Demo
+# PO Automation
 
 Internal vendor-invoice extraction system for BuildCo Infra. This repo holds:
 
