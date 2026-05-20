@@ -6,17 +6,18 @@ type Status =
   | "needs_mapping"
   | "error";
 
+// Deepened colors for AA contrast on the light Mineral Cartography theme.
 const MAP: Record<Status, { color: string; label: string }> = {
-  queued:        { color: "#3a4a5a", label: "QUEUED" },
-  processing:    { color: "#f59e0b", label: "PROCESSING" },
-  processed:     { color: "#10b981", label: "PROCESSED" },
-  needs_review:  { color: "#ef4444", label: "NEEDS REVIEW" },
-  needs_mapping: { color: "#3b82f6", label: "NEEDS MAPPING" },
-  error:         { color: "#ef4444", label: "ERROR" },
+  queued:        { color: "#6b6b65", label: "QUEUED" },
+  processing:    { color: "#b45309", label: "PROCESSING" },
+  processed:     { color: "#059669", label: "PROCESSED" },
+  needs_review:  { color: "#dc2626", label: "NEEDS REVIEW" },
+  needs_mapping: { color: "#2563eb", label: "NEEDS MAPPING" },
+  error:         { color: "#dc2626", label: "ERROR" },
 };
 
 export function StatusBadge({ status }: { status: string }) {
-  const meta = MAP[status as Status] ?? { color: "#3a4a5a", label: status };
+  const meta = MAP[status as Status] ?? { color: "#6b6b65", label: status };
   return (
     <span className="status">
       <span className="status-dot" style={{ background: meta.color }} />
@@ -28,14 +29,14 @@ export function StatusBadge({ status }: { status: string }) {
 export function RoleBadge({ role }: { role: string }) {
   const col =
     role === "admin"
-      ? "#ef4444"
+      ? "#dc2626"
       : role === "accountant"
-      ? "#3b82f6"
-      : "#10b981";
+      ? "#2563eb"
+      : "#059669";
   return (
     <span
       className="pill"
-      style={{ color: col, border: `1px solid ${col}33`, background: `${col}0d` }}
+      style={{ color: col, border: `1px solid ${col}55`, background: `${col}14` }}
     >
       {role}
     </span>

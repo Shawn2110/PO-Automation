@@ -1,6 +1,7 @@
 // Pipeline orchestrator — mirrors stages 3..6 from docs/agent.md.
 // In the demo this runs in-process. In production, this body moves to a Celery worker.
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { runOcr } from "@/lib/ocr";
 import { runExtraction, pickVendorNameCandidate } from "@/lib/extraction/extract";
@@ -139,50 +140,83 @@ export async function runPipeline(invoiceId: string): Promise<PipelineResult> {
     // ── Stage 5 + 6: Validate + persist ───────────────────────
     const status = extraction.needsReview ? "needs_review" : "processed";
 
-    await prisma.$transaction([
-      prisma.invoice.update({
-        where: { id: invoiceId },
-        data: {
-          invoiceNumber: extraction.invoiceNumber.value ?? inv.invoiceNumber,
-          invoiceDate:   extraction.invoiceDate.value,
-          clientName:    extraction.clientName.value,
-          amountBeforeGst: extraction.amountBeforeGst.value,
-          amountAfterGst:  extraction.amountAfterGst.value,
-          gstPct:          extraction.gstPct,
-          gstMismatch:     extraction.gstMismatch,
-          status,
-          ocrConfidence:   ocr.overallConfidence,
-          vendorId:        vendor.id,
-          ocrBlocks:       JSON.stringify(blocks),
-        },
-      }),
-      prisma.vendor.update({
-        where: { id: vendor.id },
-        data: { invoiceCount: { increment: 1 }, lastSeen: new Date() },
-      }),
-      prisma.auditLog.create({
-        data: {
-          invoiceId,
-          action: "extracted",
-          metadata: JSON.stringify({
-            engine: ocr.engine,
-            ocrConfidence: ocr.overallConfidence,
-            fieldConfidences: {
-              invoiceDate:     extraction.invoiceDate.confidence,
-              invoiceNumber:   extraction.invoiceNumber.confidence,
-              clientName:      extraction.clientName.confidence,
-              amountBeforeGst: extraction.amountBeforeGst.confidence,
-              amountAfterGst:  extraction.amountAfterGst.confidence,
-            },
-            gstMismatch: extraction.gstMismatch,
-            vendorId: vendor.id,
-            templateId: vendor.template.id,
-          }),
-        },
-      }),
-    ]);
+    try {
+      await prisma.$transaction([
+        prisma.invoice.update({
+          where: { id: invoiceId },
+          data: {
+            invoiceNumber: extraction.invoiceNumber.value ?? inv.invoiceNumber,
+            invoiceDate:   extraction.invoiceDate.value,
+            clientName:    extraction.clientName.value,
+            amountBeforeGst: extraction.amountBeforeGst.value,
+            amountAfterGst:  extraction.amountAfterGst.value,
+            gstPct:          extraction.gstPct,
+            gstMismatch:     extraction.gstMismatch,
+            status,
+            ocrConfidence:   ocr.overallConfidence,
+            vendorId:        vendor.id,
+            ocrBlocks:       JSON.stringify(blocks),
+          },
+        }),
+        prisma.vendor.update({
+          where: { id: vendor.id },
+          data: { invoiceCount: { increment: 1 }, lastSeen: new Date() },
+        }),
+        prisma.auditLog.create({
+          data: {
+            invoiceId,
+            action: "extracted",
+            metadata: JSON.stringify({
+              engine: ocr.engine,
+              ocrConfidence: ocr.overallConfidence,
+              fieldConfidences: {
+                invoiceDate:     extraction.invoiceDate.confidence,
+                invoiceNumber:   extraction.invoiceNumber.confidence,
+                clientName:      extraction.clientName.confidence,
+                amountBeforeGst: extraction.amountBeforeGst.confidence,
+                amountAfterGst:  extraction.amountAfterGst.confidence,
+              },
+              gstMismatch: extraction.gstMismatch,
+              vendorId: vendor.id,
+              templateId: vendor.template.id,
+            }),
+          },
+        }),
+      ]);
 
-    return { invoiceId, status };
+      return { invoiceId, status };
+    } catch (e) {
+      // PRD §5.2 — duplicate detection. Surface a useful message instead of the
+      // raw "Unique constraint failed on (invoiceNumber, vendorId)" Prisma error.
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+        const extractedNumber = extraction.invoiceNumber.value;
+        const original = extractedNumber
+          ? await prisma.invoice.findFirst({
+              where: {
+                invoiceNumber: extractedNumber,
+                vendorId: vendor.id,
+                NOT: { id: invoiceId },
+              },
+              include: { uploadedBy: { select: { name: true } } },
+            })
+          : null;
+
+        const friendly = original
+          ? `Already uploaded — invoice ${original.invoiceNumber} from ${vendor.name} was processed on ${original.uploadedAt.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })} by ${original.uploadedBy?.name ?? "another user"}.`
+          : `Duplicate invoice — same number already exists for ${vendor.name}.`;
+
+        await prisma.invoice.update({ where: { id: invoiceId }, data: { status: "error" } });
+        await prisma.auditLog.create({
+          data: {
+            invoiceId,
+            action: "duplicate",
+            metadata: JSON.stringify({ message: friendly, duplicateOfId: original?.id ?? null, vendorId: vendor.id }),
+          },
+        });
+        return { invoiceId, status: "error", error: friendly };
+      }
+      throw e;
+    }
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     await prisma.invoice.update({

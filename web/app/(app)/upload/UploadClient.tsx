@@ -189,7 +189,7 @@ export function UploadClient() {
           <span className="success-title">UPLOAD FAILED · {state.fileName}</span>
         </div>
         <div className="success-body">
-          <div className="mono" style={{ fontSize: 11, color: "var(--red)", marginBottom: 16 }}>{state.message}</div>
+          <div className="mono" style={{ fontSize: 11, color: "var(--red)", marginBottom: 16, wordBreak: "break-word", lineHeight: 1.5 }}>{state.message}</div>
           <button className="btn-ghost" onClick={() => setState({ kind: "idle" })}>Try again</button>
         </div>
       </div>

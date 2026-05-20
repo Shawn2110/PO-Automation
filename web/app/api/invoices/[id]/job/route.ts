@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 
 async function lastErrorMessage(invoiceId: string): Promise<string> {
   const audit = await prisma.auditLog.findFirst({
-    where: { invoiceId, action: "error" },
+    where: { invoiceId, action: { in: ["error", "duplicate"] } },
     orderBy: { createdAt: "desc" },
   });
   if (!audit?.metadata) return "Processing failed — see audit log";
