@@ -1,8 +1,3 @@
-databases:
-  - name: po-automation-db
-    plan: free
-    postgresMajorVersion: "16"
-
 services:
   - type: web
     name: po-automation
@@ -12,10 +7,13 @@ services:
     buildCommand: npm ci --include=dev && npx prisma generate && npx prisma migrate deploy && npx tsx prisma/seed.ts && npm run build
     startCommand: npm start
     envVars:
+      # Supabase: pooled connection (port 6543, Supavisor in transaction mode).
+      # Used by the running app. Append ?pgbouncer=true&connection_limit=1 to the URL.
       - key: DATABASE_URL
-        fromDatabase:
-          name: po-automation-db
-          property: connectionString
+        sync: false
+      # Supabase: direct connection (port 5432). Used by Prisma for migrations only.
+      - key: DIRECT_URL
+        sync: false
       - key: AUTH_SECRET
         generateValue: true
       - key: AUTH_TRUST_HOST
