@@ -1,35 +1,60 @@
 @import "tailwindcss";
 
-/* ─── Design tokens — Mineral Cartography (Light) ─── */
+/* ─── Design tokens — Annual Report. OKLCH with neutrals tinted toward amber.
+       Light by default, dark via prefers-color-scheme. ─── */
 :root {
-  --bg:      #fafaf7;   /* warm off-white page background */
-  --off:     #f1efe8;   /* slightly darker for cards / sidebar / inputs */
-  --border:  #e5e3dc;   /* hairline */
-  --border2: #d4d1c8;   /* visible border */
-  --amber:   #b45309;   /* brand accent — deepened for AA contrast on light */
-  --amber-d: #fde68a;   /* amber-tinted border */
-  --amber-g: #fef3c7;   /* amber-tinted background */
-  --white:   #1c1c1a;   /* primary text (warm near-black) */
-  --muted:   #6b6b65;   /* secondary text */
-  --dim:     #ebe9e3;   /* filler (chart bars) */
-  --green:   #059669;
-  --red:     #dc2626;
-  --blue:    #2563eb;
-  --font-mono: var(--font-ibm-plex-mono), ui-monospace, monospace;
-  --font-sans: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
+  /* Amber hue anchor — used to tint every neutral 3° toward warmth. */
+  --hue-amber: 55;
+
+  /* Light palette */
+  --bg:      oklch(98.4% 0.006 var(--hue-amber));   /* warm off-white */
+  --off:     oklch(95.5% 0.010 var(--hue-amber));   /* card / input fill */
+  --border:  oklch(91.5% 0.012 var(--hue-amber));   /* hairline */
+  --border2: oklch(85.5% 0.018 var(--hue-amber));   /* visible border */
+  --dim:     oklch(93.0% 0.010 var(--hue-amber));   /* chart fill / disabled */
+  --amber:   oklch(54.0% 0.156 var(--hue-amber));   /* primary accent, AA on bg */
+  --amber-d: oklch(86.0% 0.080 var(--hue-amber));   /* amber-tinted border */
+  --amber-g: oklch(94.0% 0.045 var(--hue-amber));   /* amber-tinted background */
+  --white:   oklch(20.0% 0.014 var(--hue-amber));   /* primary text */
+  --muted:   oklch(48.0% 0.014 var(--hue-amber));   /* secondary text */
+  --green:   oklch(60.0% 0.150 160);
+  --red:     oklch(58.0% 0.200 25);
+  --blue:    oklch(58.0% 0.180 255);
+
+  --font-mono:    var(--font-mono-var), ui-monospace, monospace;
+  --font-sans:    var(--font-sans-var), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-display-var), Georgia, serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:      oklch(16.0% 0.008 var(--hue-amber));
+    --off:     oklch(20.5% 0.012 var(--hue-amber));
+    --border:  oklch(25.5% 0.014 var(--hue-amber));
+    --border2: oklch(32.0% 0.018 var(--hue-amber));
+    --dim:     oklch(24.0% 0.012 var(--hue-amber));
+    --amber:   oklch(78.0% 0.150 var(--hue-amber));   /* lighter for AA on dark */
+    --amber-d: oklch(34.0% 0.080 var(--hue-amber));
+    --amber-g: oklch(26.0% 0.060 var(--hue-amber));
+    --white:   oklch(94.0% 0.008 var(--hue-amber));
+    --muted:   oklch(64.0% 0.012 var(--hue-amber));
+    --green:   oklch(72.0% 0.140 160);
+    --red:     oklch(70.0% 0.180 25);
+    --blue:    oklch(72.0% 0.160 255);
+  }
 }
 
 @theme {
-  --color-bg: #fafaf7;
-  --color-off: #f1efe8;
-  --color-border-1: #e5e3dc;
-  --color-border-2: #d4d1c8;
-  --color-amber: #b45309;
-  --color-fg: #1c1c1a;
-  --color-muted: #6b6b65;
-  --color-ok: #059669;
-  --color-err: #dc2626;
-  --color-info: #2563eb;
+  --color-bg: var(--bg);
+  --color-off: var(--off);
+  --color-border-1: var(--border);
+  --color-border-2: var(--border2);
+  --color-amber: var(--amber);
+  --color-fg: var(--white);
+  --color-muted: var(--muted);
+  --color-ok: var(--green);
+  --color-err: var(--red);
+  --color-info: var(--blue);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -41,7 +66,22 @@ body {
   color: var(--white);
   font-family: var(--font-sans);
   font-size: 13px;
+  font-feature-settings: "ss01" 1, "cv01" 1;  /* Public Sans alternates: open 4, single-storey a */
   -webkit-font-smoothing: antialiased;
+}
+
+/* Mono numbers always tabular so columns of figures align. */
+.mono, [class*="td-mono"], [class*="font-mono"] {
+  font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Display face — Vollkorn italic — used sparingly. */
+.display {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 500;
+  letter-spacing: -0.01em;
 }
 
 ::-webkit-scrollbar { width: 3px; height: 3px; }
@@ -257,6 +297,93 @@ td { padding: 12px 16px; }
 .spin { animation: spin 1.2s linear infinite; }
 @keyframes fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .fade-in { animation: fade-in 0.3s ease forwards; }
+
+/* ─── Login page ─── */
+.login-input {
+  width: 100%;
+  background: var(--off);
+  border: 1px solid var(--border2);
+  border-radius: 2px;
+  padding: 11px 13px;
+  font-size: 13px;
+  color: var(--white);
+  font-family: var(--font-sans);
+  transition: border-color 0.15s, background 0.15s;
+  outline: none;
+}
+.login-input::placeholder { color: var(--muted); }
+.login-input:focus {
+  border-color: var(--amber);
+  background: var(--bg);
+}
+
+.login-submit {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 11px;
+  background: var(--amber);
+  color: var(--bg);
+  border: 1px solid var(--amber);
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.15s;
+}
+.login-submit:hover { opacity: 0.92; }
+.login-submit:active { transform: translateY(0.5px); }
+
+.role-chip {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border2);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  font-family: var(--font-sans);
+  text-align: left;
+}
+.role-chip:hover {
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 4%, var(--bg));
+}
+.role-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
+}
+.role-chip-name {
+  font-size: 13px;
+  color: var(--white);
+  font-weight: 500;
+}
+.role-chip-meta {
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+.role-chip-arrow {
+  font-size: 13px;
+  color: var(--muted);
+  transition: color 0.15s, transform 0.15s;
+}
+.role-chip:hover .role-chip-arrow {
+  color: var(--amber);
+  transform: translateX(2px);
+}
 
 /* utility badges (used in login / dashboard placeholders) */
 .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 2px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; border: 1px solid transparent; }
