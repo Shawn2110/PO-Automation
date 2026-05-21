@@ -204,6 +204,7 @@ def web():
     """Public HTTP endpoint. Validates the bearer token, then dispatches to the
     GPU class which runs the actual VLM extraction."""
     import os
+    from typing import Annotated
     from fastapi import FastAPI, File, UploadFile, Header, HTTPException
 
     api = FastAPI(title="PO Automation VLM", docs_url=None, redoc_url=None)
@@ -215,8 +216,8 @@ def web():
 
     @api.post("/extract")
     async def extract(
-        pdf: UploadFile = File(...),
-        authorization: str | None = Header(default=None),
+        pdf: Annotated[UploadFile, File()],
+        authorization: Annotated[str | None, Header()] = None,
     ):
         if not authorization or authorization != f"Bearer {expected}":
             raise HTTPException(status_code=401, detail="Unauthorized")
