@@ -25,7 +25,9 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
         "vllm==0.7.3",
-        "transformers>=4.49.0",
+        # vLLM 0.7.3 uses Qwen2Tokenizer.all_special_tokens_extended which transformers 5.x
+        # removed. Pin to the 4.x line until we bump vLLM.
+        "transformers==4.49.0",
         "pillow>=10.3.0",
         "pymupdf>=1.24.0",
         "fastapi[standard]",
@@ -46,7 +48,10 @@ cache_vol = modal.Volume.from_name("po-automation-vlm-cache", create_if_missing=
     secrets=[modal.Secret.from_name("po-automation-secrets")],
     timeout=600,
     scaledown_window=300,
-    enable_memory_snapshot=True,
+    # Memory snapshot temporarily disabled — Modal caches old function definitions
+    # in the snapshot which makes code changes invisible until the snapshot is
+    # invalidated. Re-enable once the contract is stable.
+    enable_memory_snapshot=False,
 )
 class InvoiceVLM:
     @modal.enter()
@@ -56,27 +61,10 @@ class InvoiceVLM:
         os.environ["TRANSFORMERS_CACHE"] = "/cache/huggingface"
 
         from vllm import LLM, SamplingParams
-        from vllm.sampling_params import GuidedDecodingParams
 
-        # Schema-guided decoding pins the model output to valid JSON we can parse.
-        # Numbers are typed as ["number", "null"] so the model can decline cleanly.
-        self._schema = {
-            "type": "object",
-            "properties": {
-                "invoiceNumber":   {"type": ["string", "null"]},
-                "invoiceDate":     {"type": ["string", "null"]},  # ISO 8601 YYYY-MM-DD
-                "vendorName":      {"type": ["string", "null"]},
-                "gstNumber":       {"type": ["string", "null"]},  # 15-char Indian GSTIN
-                "amountBeforeGst": {"type": ["number", "null"]},
-                "amountAfterGst":  {"type": ["number", "null"]},
-            },
-            "required": [
-                "invoiceNumber", "invoiceDate", "vendorName",
-                "gstNumber", "amountBeforeGst", "amountAfterGst",
-            ],
-            "additionalProperties": False,
-        }
-
+        # xgrammar 0.1.11 + vLLM 0.7.3 throw a C++ Variant type-mismatch on any
+        # schema we tried (including pure-string fields). The prompt is strict
+        # enough — we parse defensively in _run_vlm. Drop guided decoding.
         self.llm = LLM(
             model=MODEL_NAME,
             revision=MODEL_REVISION,
@@ -91,7 +79,6 @@ class InvoiceVLM:
         self._sampling = SamplingParams(
             temperature=0.0,
             max_tokens=512,
-            guided_decoding=GuidedDecodingParams(json=self._schema),
         )
 
         cache_vol.commit()
@@ -113,31 +100,21 @@ class InvoiceVLM:
         finally:
             doc.close()
 
-    def _build_messages(self, image):
-        return [
-            {
-                "role": "system",
-                "content": (
-                    "You are an invoice extraction system for Indian GST tax invoices. "
-                    "Look at the invoice image and return exactly these six fields as JSON: "
-                    "invoiceNumber (the invoice/document number as printed), "
-                    "invoiceDate (ISO 8601 date YYYY-MM-DD), "
-                    "vendorName (the seller/supplier name, NOT the buyer), "
-                    "gstNumber (the 15-character GSTIN of the seller), "
-                    "amountBeforeGst (taxable value as a number, no currency symbols or commas), "
-                    "amountAfterGst (final grand total including tax as a number). "
-                    "If a field is genuinely not present, return null for that field. "
-                    "Do not invent values. Do not include any text outside the JSON."
-                ),
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": image},
-                    {"type": "text", "text": "Extract the six fields as JSON."},
-                ],
-            },
-        ]
+    SYSTEM_PROMPT = (
+        "You are an invoice extraction system for Indian GST tax invoices. "
+        "Look at the invoice image and return exactly these six fields as JSON. "
+        "Every field is a string. If a field is genuinely not present, return "
+        "an empty string '' for it. Do not invent values. Do not include any "
+        "text outside the JSON. Fields:\n"
+        "- invoiceNumber: the invoice/document number exactly as printed.\n"
+        "- invoiceDate: the invoice date in ISO 8601 YYYY-MM-DD form.\n"
+        "- vendorName: the seller/supplier name (NOT the buyer).\n"
+        "- gstNumber: the 15-character GSTIN of the seller.\n"
+        "- amountBeforeGst: the taxable value as a plain numeric string "
+        "(no currency symbols, no commas, e.g. '245000.00').\n"
+        "- amountAfterGst: the final grand total including tax as a plain "
+        "numeric string."
+    )
 
     def _run_vlm(self, pdf_bytes: bytes) -> dict:
         """Internal: run rasterize + VLM, return parsed dict."""
@@ -145,29 +122,74 @@ class InvoiceVLM:
         import time
 
         start = time.monotonic()
-        image = self._rasterize_page1(pdf_bytes)
-        messages = self._build_messages(image)
+        pil_image = self._rasterize_page1(pdf_bytes)
 
-        outputs = self.llm.chat(messages, sampling_params=self._sampling)
+        # Use Qwen2.5-VL's chat-template tokens with multi_modal_data instead of
+        # the OpenAI-style {"type": "image_url"} content shape — vLLM 0.7.3's chat()
+        # rejects unknown part types and the Qwen image-token placeholder is the
+        # documented multi-modal path.
+        prompt = (
+            f"<|im_start|>system\n{self.SYSTEM_PROMPT}<|im_end|>\n"
+            "<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>"
+            "Extract the six fields as JSON.<|im_end|>\n"
+            "<|im_start|>assistant\n"
+        )
+
+        outputs = self.llm.generate(
+            {"prompt": prompt, "multi_modal_data": {"image": pil_image}},
+            sampling_params=self._sampling,
+        )
         text = outputs[0].outputs[0].text.strip()
 
+        # Strip code-fence wrappers and find the first {...} block — the model
+        # occasionally adds explanatory prose around the JSON.
+        cleaned = text
+        if cleaned.startswith("```"):
+            cleaned = cleaned.strip("`")
+            if cleaned.lower().startswith("json"):
+                cleaned = cleaned[4:]
+        first_brace = cleaned.find("{")
+        last_brace = cleaned.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            cleaned = cleaned[first_brace : last_brace + 1]
+
         try:
-            parsed = json.loads(text)
+            raw = json.loads(cleaned)
         except json.JSONDecodeError:
-            # Guided decoding should make this unreachable, but be defensive.
             raise RuntimeError(f"VLM output was not valid JSON: {text[:400]}")
 
-        # Compute derived gstPct + field-completeness confidence.
-        before = parsed.get("amountBeforeGst")
-        after = parsed.get("amountAfterGst")
+        # Schema is all-strings (xgrammar constraint). Coerce empty strings to None
+        # and parse numeric strings to floats so the web side gets a clean shape.
+        def _str_or_none(v):
+            if not isinstance(v, str) or v.strip() == "":
+                return None
+            return v.strip()
+
+        def _num_or_none(v):
+            if not isinstance(v, str) or v.strip() == "":
+                return None
+            s = v.replace(",", "").replace("₹", "").replace("INR", "").strip()
+            try:
+                return float(s)
+            except ValueError:
+                return None
+
+        parsed = {
+            "invoiceNumber":   _str_or_none(raw.get("invoiceNumber")),
+            "invoiceDate":     _str_or_none(raw.get("invoiceDate")),
+            "vendorName":      _str_or_none(raw.get("vendorName")),
+            "gstNumber":       _str_or_none(raw.get("gstNumber")),
+            "amountBeforeGst": _num_or_none(raw.get("amountBeforeGst")),
+            "amountAfterGst":  _num_or_none(raw.get("amountAfterGst")),
+        }
+
+        before = parsed["amountBeforeGst"]
+        after = parsed["amountAfterGst"]
         gst_pct = None
-        if isinstance(before, (int, float)) and isinstance(after, (int, float)) and before > 0:
+        if before is not None and after is not None and before > 0:
             gst_pct = round(((after - before) / before) * 100, 2)
 
-        non_null = sum(1 for k in (
-            "invoiceNumber", "invoiceDate", "vendorName",
-            "gstNumber", "amountBeforeGst", "amountAfterGst",
-        ) if parsed.get(k) not in (None, ""))
+        non_null = sum(1 for v in parsed.values() if v is not None)
         confidence = round(non_null / 6, 3)
 
         return {
@@ -178,62 +200,66 @@ class InvoiceVLM:
             "durationMs": int((time.monotonic() - start) * 1000),
         }
 
-    @modal.fastapi_endpoint(method="POST", docs=False)
-    def extract(self, file: bytes = None, authorization: str = None):
-        # NOTE: this signature is a placeholder — Modal injects a FastAPI request,
-        # but `@modal.fastapi_endpoint` doesn't natively support multipart well.
-        # The real handler lives in the asgi_app below; this stub is here so the
-        # class also exposes a callable RPC for tests via .extract.remote(bytes).
-        raise RuntimeError("Use /extract on the asgi_app web endpoint, not this stub.")
-
     @modal.method()
     def extract_rpc(self, pdf_bytes: bytes) -> dict:
-        """RPC entrypoint — also used by the asgi_app handler."""
+        """RPC entrypoint — called from the asgi_app web handler."""
         return self._run_vlm(pdf_bytes)
 
 
 @app.function(
     image=modal.Image.debian_slim(python_version="3.11").pip_install(
-        "fastapi[standard]", "python-multipart"
+        "starlette", "python-multipart"
     ),
     secrets=[modal.Secret.from_name("po-automation-secrets")],
     timeout=600,
 )
 @modal.asgi_app()
 def web():
-    """Public HTTP endpoint. Validates the bearer token, then dispatches to the
-    GPU class which runs the actual VLM extraction."""
+    """Public HTTP endpoint. Plain Starlette — we avoid FastAPI/Pydantic because
+    FastAPI 0.136 + Pydantic 2.13 have a ForwardRef introspection bug that 500s
+    on any annotated parameter inside a nested-scope function (which is exactly
+    what @modal.asgi_app forces). Starlette doesn't introspect signatures."""
     import os
-    from typing import Annotated
-    from fastapi import FastAPI, File, UploadFile, Header, HTTPException
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
 
-    api = FastAPI(title="PO Automation VLM", docs_url=None, redoc_url=None)
     expected = os.environ["MODAL_AUTH_TOKEN"]
 
-    @api.get("/health")
-    def health():
-        return {"ok": True, "engine": "qwen2.5-vl-7b-awq", "model": MODEL_NAME}
+    async def health(request):
+        return JSONResponse({"ok": True, "engine": "qwen2.5-vl-7b-awq", "model": MODEL_NAME})
 
-    @api.post("/extract")
-    async def extract(
-        pdf: Annotated[UploadFile, File()],
-        authorization: Annotated[str | None, Header()] = None,
-    ):
-        if not authorization or authorization != f"Bearer {expected}":
-            raise HTTPException(status_code=401, detail="Unauthorized")
-        if pdf.content_type not in ("application/pdf", "application/octet-stream"):
-            raise HTTPException(status_code=400, detail="Only PDF files accepted")
+    async def extract(req):
+        auth = req.headers.get("authorization")
+        if not auth or auth != f"Bearer {expected}":
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
 
-        pdf_bytes = await pdf.read()
+        try:
+            form = await req.form()
+        except Exception as e:
+            return JSONResponse({"detail": f"Could not parse multipart body: {e}"}, status_code=400)
+
+        pdf_part = form.get("pdf")
+        if pdf_part is None or not hasattr(pdf_part, "read"):
+            return JSONResponse({"detail": "Missing 'pdf' file part"}, status_code=400)
+
+        content_type = getattr(pdf_part, "content_type", None)
+        if content_type not in ("application/pdf", "application/octet-stream", None):
+            return JSONResponse({"detail": "Only PDF files accepted"}, status_code=400)
+
+        pdf_bytes = await pdf_part.read()
         if len(pdf_bytes) < 4 or pdf_bytes[:4] != b"%PDF":
-            raise HTTPException(status_code=400, detail="Not a valid PDF (missing %PDF magic)")
+            return JSONResponse({"detail": "Not a valid PDF (missing %PDF magic)"}, status_code=400)
         if len(pdf_bytes) > 20 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail="PDF exceeds 20MB")
+            return JSONResponse({"detail": "PDF exceeds 20MB"}, status_code=413)
 
         try:
             result = InvoiceVLM().extract_rpc.remote(pdf_bytes)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
-        return result
+            return JSONResponse({"detail": f"{type(e).__name__}: {e}"}, status_code=500)
+        return JSONResponse(result)
 
-    return api
+    return Starlette(routes=[
+        Route("/health", health, methods=["GET"]),
+        Route("/extract", extract, methods=["POST"]),
+    ])
