@@ -44,7 +44,7 @@ export async function runPipeline(invoiceId: string): Promise<PipelineResult> {
     // ── Stage 3: Vendor detection ─────────────────────────────
     const fullText = blocks.map((b) => b.text).join(" ").toUpperCase();
     const gstMatch = fullText.match(GST_PATTERN);
-    let vendor = null as Awaited<ReturnType<typeof prisma.vendor.findUnique>>;
+    let vendor: Prisma.VendorGetPayload<{ include: { template: true } }> | null = null;
     if (gstMatch) {
       vendor = await prisma.vendor.findUnique({
         where: { gstNumber: gstMatch[0] },
