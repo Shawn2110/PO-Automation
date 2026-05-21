@@ -1,17 +1,15 @@
-// Pipeline orchestrator — mirrors stages 3..6 from docs/agent.md.
-// In the demo this runs in-process. In production, this body moves to a Celery worker.
+// Pipeline orchestrator — single-stage Qwen2.5-VL extraction via Modal.
+// Replaces the Tesseract-OCR + template-matching multi-stage pipeline (now in
+// ../archive/ocr-service/ + web/lib/extraction/).
 
+import { promises as fs } from "fs";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { runOcr } from "@/lib/ocr";
-import { runExtraction, pickVendorNameCandidate } from "@/lib/extraction/extract";
-import { GST_PATTERN } from "@/lib/extraction/types";
-import type { Block } from "@/lib/extraction/types";
-import { autoDetectLabels, allLabelsFound, countLabelsFound } from "@/lib/extraction/autodetect";
+import { runVlmExtract } from "@/lib/ocr";
 
 export type PipelineResult = {
   invoiceId: string;
-  status: "processed" | "needs_review" | "needs_mapping" | "error";
+  status: "processed" | "needs_review" | "error";
   error?: string;
 };
 
@@ -22,163 +20,69 @@ export async function runPipeline(invoiceId: string): Promise<PipelineResult> {
   try {
     await prisma.invoice.update({ where: { id: invoiceId }, data: { status: "processing" } });
 
-    // ── Stage 2: OCR ──────────────────────────────────────────
-    const ocr = await runOcr(inv.pdfPath);
-    const blocks: Block[] = ocr.blocks;
+    // ── VLM extraction ────────────────────────────────────────
+    const pdfBuffer = await fs.readFile(inv.pdfPath);
+    const result = await runVlmExtract(pdfBuffer);
 
-    if (ocr.overallConfidence < 0.5) {
-      await prisma.invoice.update({
-        where: { id: invoiceId },
-        data: {
-          status: "error",
-          ocrConfidence: ocr.overallConfidence,
-          ocrBlocks: JSON.stringify(blocks),
-        },
-      });
-      await prisma.auditLog.create({
-        data: { invoiceId, action: "ocr_low_confidence", metadata: JSON.stringify({ overall: ocr.overallConfidence }) },
-      });
-      return { invoiceId, status: "error", error: "OCR confidence too low" };
-    }
-
-    // ── Stage 3: Vendor detection ─────────────────────────────
-    const fullText = blocks.map((b) => b.text).join(" ").toUpperCase();
-    const gstMatch = fullText.match(GST_PATTERN);
-    let vendor: Prisma.VendorGetPayload<{ include: { template: true } }> | null = null;
-    if (gstMatch) {
-      vendor = await prisma.vendor.findUnique({
-        where: { gstNumber: gstMatch[0] },
-        include: { template: true },
-      });
-      if (!vendor) {
-        const candidateName = pickVendorNameCandidate(blocks) ?? "Unknown Vendor";
-        vendor = await prisma.vendor.create({
-          data: { name: candidateName, gstNumber: gstMatch[0], hasTemplate: false, lastSeen: new Date() },
-          include: { template: true },
-        });
-      }
-    }
-
-    // ── Stage 4a: Template auto-detect ────────────────────────
-    // If we have a vendor but no saved template, try to identify the five
-    // canonical labels from a built-in synonyms list. If we find all of them,
-    // save the result as the vendor's template and proceed to normal
-    // extraction. Otherwise fall through to Stage 4b (manual mapping).
-    if (vendor && !vendor.hasTemplate) {
-      const autoLabels = autoDetectLabels(blocks);
-      const foundCount = countLabelsFound(autoLabels);
-
-      if (allLabelsFound(autoLabels)) {
-        const created = await prisma.vendorTemplate.upsert({
-          where: { vendorId: vendor.id },
+    // ── Vendor upsert by GST number ───────────────────────────
+    const vendor = result.gstNumber
+      ? await prisma.vendor.upsert({
+          where: { gstNumber: result.gstNumber },
+          update: {
+            lastSeen: new Date(),
+            invoiceCount: { increment: 1 },
+            // If the vendor was previously seeded with a placeholder name and the
+            // VLM now has a real one, fill it in. Don't overwrite an existing name.
+            ...(result.vendorName ? { name: result.vendorName } : {}),
+          },
           create: {
-            vendorId: vendor.id,
-            invoiceDateLabel:     autoLabels.invoiceDate     ?? null,
-            invoiceNumberLabel:   autoLabels.invoiceNumber   ?? null,
-            clientNameLabel:      autoLabels.clientName      ?? null,
-            amountBeforeGstLabel: autoLabels.amountBeforeGst ?? null,
-            amountAfterGstLabel:  autoLabels.amountAfterGst  ?? null,
+            name: result.vendorName ?? "Unknown Vendor",
+            gstNumber: result.gstNumber,
+            hasTemplate: false,
+            lastSeen: new Date(),
+            invoiceCount: 1,
           },
-          update: {},
-        });
-        await prisma.vendor.update({ where: { id: vendor.id }, data: { hasTemplate: true } });
-        await prisma.auditLog.create({
-          data: {
-            invoiceId,
-            action: "template_auto_detected",
-            metadata: JSON.stringify({ vendorId: vendor.id, labels: autoLabels, engine: ocr.engine }),
-          },
-        });
-        // Re-shape the vendor object so the existing extraction path picks up the new template.
-        vendor = { ...vendor, hasTemplate: true, template: created };
-      } else {
-        await prisma.auditLog.create({
-          data: {
-            invoiceId,
-            action: "template_auto_detect_partial",
-            metadata: JSON.stringify({
-              vendorId: vendor.id,
-              foundCount,
-              labels: autoLabels,
-              engine: ocr.engine,
-            }),
-          },
-        });
-      }
-    }
+        })
+      : null;
 
-    // ── Stage 4b: Manual mapping fallback ─────────────────────
-    if (!vendor || !vendor.template || !vendor.hasTemplate) {
-      // Persist OCR blocks so the template-mapping UI has labels to pick from.
-      await prisma.invoice.update({
-        where: { id: invoiceId },
-        data: {
-          status: "needs_mapping",
-          vendorId: vendor?.id ?? null,
-          ocrConfidence: ocr.overallConfidence,
-          ocrBlocks: JSON.stringify(blocks),
-        },
-      });
-      await prisma.auditLog.create({
-        data: {
-          invoiceId,
-          action: "needs_mapping",
-          metadata: JSON.stringify({ vendorId: vendor?.id, gstFound: !!gstMatch, engine: ocr.engine }),
-        },
-      });
-      return { invoiceId, status: "needs_mapping" };
-    }
-
-    const extraction = runExtraction(blocks, {
-      invoiceDate:     vendor.template.invoiceDateLabel,
-      invoiceNumber:   vendor.template.invoiceNumberLabel,
-      clientName:      vendor.template.clientNameLabel,
-      amountBeforeGst: vendor.template.amountBeforeGstLabel,
-      amountAfterGst:  vendor.template.amountAfterGstLabel,
-    });
-
-    // ── Stage 5 + 6: Validate + persist ───────────────────────
-    const status = extraction.needsReview ? "needs_review" : "processed";
+    const status: "processed" | "needs_review" = result.confidence < 0.7 ? "needs_review" : "processed";
 
     try {
       await prisma.$transaction([
         prisma.invoice.update({
           where: { id: invoiceId },
           data: {
-            invoiceNumber: extraction.invoiceNumber.value ?? inv.invoiceNumber,
-            invoiceDate:   extraction.invoiceDate.value,
-            clientName:    extraction.clientName.value,
-            amountBeforeGst: extraction.amountBeforeGst.value,
-            amountAfterGst:  extraction.amountAfterGst.value,
-            gstPct:          extraction.gstPct,
-            gstMismatch:     extraction.gstMismatch,
+            invoiceNumber:   result.invoiceNumber ?? inv.invoiceNumber,
+            invoiceDate:     result.invoiceDate ? new Date(result.invoiceDate) : null,
+            // Buyer name isn't on most GST invoices in a stable position — the VLM
+            // doesn't extract it. Static for the BuildCo demo.
+            clientName:      "BuildCo Infra Pvt Ltd",
+            amountBeforeGst: result.amountBeforeGst,
+            amountAfterGst:  result.amountAfterGst,
+            gstPct:          result.gstPct,
+            gstMismatch:     false,
             status,
-            ocrConfidence:   ocr.overallConfidence,
-            vendorId:        vendor.id,
-            ocrBlocks:       JSON.stringify(blocks),
+            ocrConfidence:   result.confidence,
+            vendorId:        vendor?.id ?? null,
           },
-        }),
-        prisma.vendor.update({
-          where: { id: vendor.id },
-          data: { invoiceCount: { increment: 1 }, lastSeen: new Date() },
         }),
         prisma.auditLog.create({
           data: {
             invoiceId,
             action: "extracted",
             metadata: JSON.stringify({
-              engine: ocr.engine,
-              ocrConfidence: ocr.overallConfidence,
-              fieldConfidences: {
-                invoiceDate:     extraction.invoiceDate.confidence,
-                invoiceNumber:   extraction.invoiceNumber.confidence,
-                clientName:      extraction.clientName.confidence,
-                amountBeforeGst: extraction.amountBeforeGst.confidence,
-                amountAfterGst:  extraction.amountAfterGst.confidence,
+              engine: result.engine,
+              confidence: result.confidence,
+              durationMs: result.durationMs,
+              vendorId: vendor?.id ?? null,
+              fieldsFilled: {
+                invoiceNumber:   !!result.invoiceNumber,
+                invoiceDate:     !!result.invoiceDate,
+                vendorName:      !!result.vendorName,
+                gstNumber:       !!result.gstNumber,
+                amountBeforeGst: result.amountBeforeGst != null,
+                amountAfterGst:  result.amountAfterGst != null,
               },
-              gstMismatch: extraction.gstMismatch,
-              vendorId: vendor.id,
-              templateId: vendor.template.id,
             }),
           },
         }),
@@ -188,12 +92,11 @@ export async function runPipeline(invoiceId: string): Promise<PipelineResult> {
     } catch (e) {
       // PRD §5.2 — duplicate detection. Surface a useful message instead of the
       // raw "Unique constraint failed on (invoiceNumber, vendorId)" Prisma error.
-      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-        const extractedNumber = extraction.invoiceNumber.value;
-        const original = extractedNumber
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002" && vendor) {
+        const original = result.invoiceNumber
           ? await prisma.invoice.findFirst({
               where: {
-                invoiceNumber: extractedNumber,
+                invoiceNumber: result.invoiceNumber,
                 vendorId: vendor.id,
                 NOT: { id: invoiceId },
               },

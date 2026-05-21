@@ -1,0 +1,11 @@
+# Local-dev only — `modal` is the only thing you actually pip install on your
+# machine. The vLLM stack runs inside Modal's container image (see image=...
+# in app.py). Listed here for IDE autocomplete and local sanity-check imports.
+modal>=0.66.0
+vllm==0.7.3
+transformers>=4.49.0
+pillow>=10.3.0
+pymupdf>=1.24.0
+fastapi[standard]
+python-multipart
+huggingface_hub[hf_transfer]

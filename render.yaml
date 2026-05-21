@@ -20,3 +20,10 @@ services:
         value: "true"
       - key: NODE_ENV
         value: production
+      # Modal VLM sidecar — modal-vlm/. Paste the URL from `modal deploy` output.
+      - key: MODAL_VLM_URL
+        sync: false
+      # Shared bearer token — same value on Modal (as secret 'po-automation-secrets')
+      # and here. Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+      - key: MODAL_AUTH_TOKEN
+        sync: false
