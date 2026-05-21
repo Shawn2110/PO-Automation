@@ -1,13 +1,12 @@
-// PO Automation — Prisma schema
-// Demo: SQLite. Upgrade path: change provider to "postgresql" + DATABASE_URL.
-// Mirrors docs/prd.md data models, with SQLite-friendly type substitutions.
+// PO Automation — Prisma schema (PostgreSQL).
+// Mirrors docs/prd.md data models.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

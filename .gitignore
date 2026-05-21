@@ -36,6 +36,9 @@ Thumbs.db
 .vscode/
 *.swp
 
+# Local run logs
+*.log
+
 # Claude Code local config
 .claude/
 
