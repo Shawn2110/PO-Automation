@@ -12,13 +12,13 @@ async function main() {
     await prisma.user.deleteMany();
   }
 
+  // Legacy cleanup: drop any 'admin'-role users left from prior seeds. Invoice
+  // foreign keys are SetNull, so this is safe — the reassignment below restores
+  // uploadedById to a live accountant on every run.
+  await prisma.user.deleteMany({ where: { role: "admin" } });
+
   const hash = (pw: string) => bcrypt.hashSync(pw, 10);
 
-  const admin = await prisma.user.upsert({
-    where: { email: "admin@buildco.in" },
-    update: {},
-    create: { name: "Riya Admin", email: "admin@buildco.in", passwordHash: hash("admin123"), role: "admin" },
-  });
   const accountant = await prisma.user.upsert({
     where: { email: "accountant@buildco.in" },
     update: {},
@@ -142,7 +142,7 @@ async function main() {
       status: "processed",
       ocrConfidence: 0.88,
       pdfPath: "/uploads/seed/utc-2412-887.pdf",
-      uploadedById: admin.id,
+      uploadedById: accountant.id,
     },
     {
       invoiceNumber: "UTC-2412-901",
@@ -175,7 +175,7 @@ async function main() {
   for (const inv of sampleInvoices) {
     await prisma.invoice.upsert({
       where: { invoiceNumber_vendorId: { invoiceNumber: inv.invoiceNumber, vendorId: inv.vendorId } },
-      update: {},
+      update: { uploadedById: inv.uploadedById },
       create: inv,
     });
   }

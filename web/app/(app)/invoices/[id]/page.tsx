@@ -14,7 +14,7 @@ export default async function InvoiceDetailPage({
 }) {
   const { id } = await params;
   const session = await auth();
-  const canEdit = session?.user.role === "admin" || session?.user.role === "accountant";
+  const canEdit = session?.user.role === "accountant";
 
   const inv = await prisma.invoice.findUnique({
     where: { id },

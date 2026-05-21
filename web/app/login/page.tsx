@@ -41,7 +41,7 @@ export default async function LoginPage({
         <h1 className="text-xl font-medium mb-1">Sign in</h1>
         <p className="text-muted text-xs mb-6">
           Demo accounts seeded. Try{" "}
-          <span className="mono text-fg">admin@buildco.in / admin123</span>
+          <span className="mono text-fg">accountant@buildco.in / accountant123</span>
         </p>
 
         <form action={loginAction} className="space-y-4">
@@ -85,7 +85,6 @@ export default async function LoginPage({
 
         <div className="mt-6 border-t border-border pt-4 mono text-[10px] text-muted leading-relaxed">
           <div className="mb-1 tracking-[0.12em] uppercase">Seeded users</div>
-          <div>admin@buildco.in · admin123</div>
           <div>accountant@buildco.in · accountant123</div>
           <div>viewer@buildco.in · viewer123</div>
         </div>

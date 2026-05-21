@@ -13,7 +13,7 @@ datasource db {
 // ──────────────────────────────────────────────────────────────
 //  Enums (SQLite stores as TEXT)
 // ──────────────────────────────────────────────────────────────
-// role:    admin | accountant | viewer
+// role:    accountant | viewer
 // status:  queued | processing | processed | needs_review | needs_mapping | error
 
 model User {
@@ -21,7 +21,7 @@ model User {
   name         String
   email        String    @unique
   passwordHash String
-  role         String    // admin | accountant | viewer
+  role         String    // accountant | viewer
   isActive     Boolean   @default(true)
   lastLogin    DateTime?
   createdAt    DateTime  @default(now())

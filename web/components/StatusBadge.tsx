@@ -27,12 +27,7 @@ export function StatusBadge({ status }: { status: string }) {
 }
 
 export function RoleBadge({ role }: { role: string }) {
-  const col =
-    role === "admin"
-      ? "#dc2626"
-      : role === "accountant"
-      ? "#2563eb"
-      : "#059669";
+  const col = role === "accountant" ? "#2563eb" : "#059669";
   return (
     <span
       className="pill"

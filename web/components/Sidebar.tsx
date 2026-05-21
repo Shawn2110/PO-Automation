@@ -7,11 +7,10 @@ import { Icon, type IconName } from "@/components/Icons";
 type NavItem = { href: string; label: string; icon: IconName; roles: string[] };
 
 const NAV: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: "dashboard", roles: ["admin", "accountant", "viewer"] },
-  { href: "/invoices",  label: "Invoices",  icon: "invoices",  roles: ["admin", "accountant", "viewer"] },
-  { href: "/upload",    label: "Upload",    icon: "upload",    roles: ["admin", "accountant"] },
-  { href: "/vendors",   label: "Vendors",   icon: "vendors",   roles: ["admin", "accountant"] },
-  { href: "/users",     label: "Users",     icon: "users",     roles: ["admin"] },
+  { href: "/dashboard", label: "Dashboard", icon: "dashboard", roles: ["accountant", "viewer"] },
+  { href: "/invoices",  label: "Invoices",  icon: "invoices",  roles: ["accountant", "viewer"] },
+  { href: "/upload",    label: "Upload",    icon: "upload",    roles: ["accountant"] },
+  { href: "/vendors",   label: "Vendors",   icon: "vendors",   roles: ["accountant"] },
 ];
 
 export function Sidebar({
