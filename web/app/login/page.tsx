@@ -143,8 +143,8 @@ export default async function LoginPage({
       </aside>
 
       {/* ─── Form panel ─── */}
-      <section className="flex items-center px-6 py-12 md:px-14 md:py-16">
-        <div className="w-full max-w-[360px] mx-auto md:mx-0">
+      <section className="flex items-center justify-center px-6 py-12 md:px-16 md:py-16">
+        <div className="w-full max-w-[360px] mx-auto">
           {/* Section heading */}
           <div className="flex items-baseline gap-3 mb-10">
             <span
