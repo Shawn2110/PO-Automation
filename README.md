@@ -1,179 +1,231 @@
 # PO Automation
 
-Internal vendor-invoice extraction system for BuildCo Infra. This repo holds:
+> **Vendor invoice extraction for BuildCo Infra.** Drop a PDF → a vision-language model reads it → your accountant ships it → the audit log keeps itself.
 
-- `docs/` — PRD, architecture, build plan, agent pipeline spec, workflows
-- `po-dashboard.jsx` — Phase 0 POC (1051-line static React frontend with dummy data)
-- `web/` — **Next.js 16 demo app** (frontend + API + DB)
-- `modal-vlm/` — **Modal sidecar** running Qwen2.5-VL-7B-AWQ on an L4 GPU for invoice extraction
-- `archive/ocr-service/` — Phase 1 Tesseract OCR sidecar, kept for reference (replaced by `modal-vlm/`)
+Internal tool that replaces manual GST-invoice data entry. A Vision-Language Model (Qwen2.5-VL-7B) reads the invoice image directly and returns the six canonical fields — no per-vendor template setup, no OCR-and-regex stage.
 
-The demo is deliberately structured so each piece can be swapped for its production counterpart without rewriting business logic. See [Upgrade path](#upgrade-path).
+| | |
+|---|---|
+| **Live demo** | <https://po-automation-i7xr.onrender.com> |
+| **Stack** | Next.js 16 · Auth.js v5 · Prisma · PostgreSQL · Qwen2.5-VL-7B-AWQ |
+| **Hosted on** | Render (web) · Supabase (Postgres) · Modal (GPU) |
+| **Status** | Demo · iterating with the client |
 
 ---
 
-## Quick start
+## Demo
 
-### 1. Modal VLM sidecar (one-time deploy)
+Open the live URL and sign in with one of the seeded accounts (or click a quick-login chip on the landing page):
+
+| Role | Email | Password | Can |
+|---|---|---|---|
+| Accountant | `accountant@buildco.in` | `accountant123` | Upload, edit, export |
+| Viewer | `viewer@buildco.in` | `viewer123` | Read-only |
+
+Drop any PDF on `/upload`. First extraction takes ~30–60s while the GPU spins up; subsequent uploads ~10s. The invoice appears on `/invoices` with extracted fields, vendor auto-created from the GSTIN, and an audit-log row for every change.
+
+---
+
+## Architecture
+
+```
+                  ┌────────────────────────────────┐
+                  │  Next.js 16 (Render)           │
+   PDF upload ───►│  ├─ /api/invoices/upload       │
+                  │  ├─ runPipeline()              │
+                  │  │   └─ runVlmExtract(bytes)─┐ │
+                  │  └─ Prisma (writes)          │ │
+                  └──────────────────────────────┼─┘
+                                                 │
+                  ┌──────────────────────────────▼─┐
+                  │  Modal — GPU sidecar           │
+                  │  (modal-vlm/app.py)            │
+                  │  ├─ @app.cls(gpu="L4")         │
+                  │  ├─ Qwen2.5-VL-7B-AWQ          │
+                  │  └─ Starlette /extract         │
+                  └────────────────────────────────┘
+                                                 │
+                                            stores │
+                                                 ▼
+                              ┌─────────────────────────────┐
+                              │  Supabase Postgres          │
+                              │  (User, Vendor, Invoice,    │
+                              │   AuditLog, VendorTemplate) │
+                              └─────────────────────────────┘
+```
+
+### Why a VLM instead of OCR?
+
+Phase 1 used Tesseract + template matching (now in `archive/ocr-service/`). Every new vendor needed a one-time field-mapping UI before invoices could be parsed. With Qwen2.5-VL the model reads the image directly and returns the six fields as JSON in one call — new vendors just work. The trade-off is GPU cost (~$0.002 per invoice on Modal's L4) and a cold-start hit, both acceptable on Modal's $30/mo free tier.
+
+---
+
+## Repository layout
+
+```
+.
+├── docs/                       PRD · architecture · build plan · agent spec
+├── po-dashboard.jsx            Phase 0 static POC (1051 lines, reference only)
+├── archive/ocr-service/        Phase 1 Tesseract sidecar (no longer deployed)
+│
+├── modal-vlm/                  Qwen2.5-VL-7B-AWQ on Modal L4
+│   ├── app.py                  Modal app + Starlette /extract endpoint
+│   ├── requirements.txt
+│   └── README.md
+│
+├── web/                        Next.js 16 (frontend + API + DB)
+│   ├── app/
+│   │   ├── (app)/              Authenticated shell (sidebar + topbar)
+│   │   │   ├── dashboard/      Stats (Total POs · Pending · Completed · Revenue)
+│   │   │   ├── invoices/[id]/  Inline-editable detail + audit log
+│   │   │   ├── upload/         Drag-drop, 20MB limit, magic-byte check
+│   │   │   └── vendors/        List + (legacy) template-mapping route
+│   │   ├── login/              Split-layout sign-in with quick-login chips
+│   │   └── api/                Upload · job polling · GET/PATCH · CSV/XLSX export
+│   ├── lib/
+│   │   ├── db.ts               Prisma client singleton
+│   │   ├── ocr.ts              HTTP client → Modal /extract
+│   │   ├── storage.ts          Local-disk adapter (swap for S3/R2)
+│   │   └── pipeline.ts         One-stage VLM orchestrator
+│   ├── prisma/
+│   │   ├── schema.prisma       PostgreSQL · 5 models
+│   │   └── seed.ts             Idempotent demo seed (upserts)
+│   └── auth.ts                 Auth.js v5 credentials provider
+│
+├── render.yaml                 Render Blueprint: web service + env vars
+└── .impeccable.md              Design context (annual-report aesthetic)
+```
+
+---
+
+## Local setup
+
+You need: Node 20+, Python 3.11+, a Postgres URL (Supabase free works), and a Modal account.
+
+### 1. Modal sidecar (one-time deploy)
 
 ```powershell
 cd modal-vlm
 pip install modal
-modal token new
-modal secret create po-automation-secrets MODAL_AUTH_TOKEN=<random-32-char-hex>
-modal deploy app.py
+python -m modal setup                          # opens browser to auth
+python -c "import secrets; print(secrets.token_hex(32))"  # generate auth token
+python -m modal secret create po-automation-secrets MODAL_AUTH_TOKEN=<that-token>
+python -m modal deploy app.py
 ```
 
-`modal deploy` prints a stable URL — that's your `MODAL_VLM_URL`. See `modal-vlm/README.md` for details. First deploy pulls ~14GB of Qwen weights into the Modal Volume; subsequent deploys reuse the cache.
+The deploy prints a URL like `https://<user>--po-automation-vlm-web.modal.run` — that's your `MODAL_VLM_URL`. First deploy takes ~5 min (vLLM container build + Qwen weight download). Subsequent deploys are seconds.
 
-### 2. Next.js web app
+See [`modal-vlm/README.md`](modal-vlm/README.md) for the endpoint contract and cost math.
+
+### 2. Web app
 
 ```powershell
 cd web
 npm install
-# Set web/.env from web/.env.example with:
-#   DATABASE_URL=<your Postgres>
-#   MODAL_VLM_URL=<from step 1>
-#   MODAL_AUTH_TOKEN=<same as the Modal secret>
-npm run db:migrate
+cp .env.example .env            # then fill DATABASE_URL, AUTH_SECRET, MODAL_VLM_URL, MODAL_AUTH_TOKEN
+npx prisma migrate deploy
 npm run db:seed
 npm run dev
 ```
 
-Open <http://localhost:3000>. Sign in with one of the seeded accounts:
+Open <http://localhost:3000>. Sign in with a seeded account or use a quick-login chip.
 
-| Role | Email | Password |
-|---|---|---|
-| Accountant | `accountant@buildco.in` | `accountant123` |
-| Viewer | `viewer@buildco.in` | `viewer123` |
+### Environment
+
+```ini
+# Postgres — local or Supabase
+DATABASE_URL=postgresql://...:6543/postgres?pgbouncer=true&connection_limit=1
+DIRECT_URL=postgresql://...:5432/postgres        # Prisma migrations only
+
+# Auth.js v5
+AUTH_SECRET=$(openssl rand -base64 32)
+AUTH_TRUST_HOST=true
+
+# Modal VLM
+MODAL_VLM_URL=https://<user>--po-automation-vlm-web.modal.run
+MODAL_AUTH_TOKEN=<same value as the Modal secret>
+```
 
 ---
 
-## What works in the demo
+## Production deploy
+
+[`render.yaml`](render.yaml) is a Blueprint that provisions the web service. Connect the GitHub repo at <https://dashboard.render.com>, point a Blueprint at this file, paste `DATABASE_URL` / `DIRECT_URL` / `MODAL_VLM_URL` / `MODAL_AUTH_TOKEN` into the Environment tab. Render runs `prisma migrate deploy` + the seed during build.
+
+Postgres lives on **Supabase free tier** (500MB, pauses after 7 days idle). Pooled connection on port 6543 with Supavisor; direct connection on port 5432 for migrations.
+
+The GPU sidecar is a separate Modal deploy — not part of the Render rollout. Stable across web redeploys.
+
+---
+
+## What works
 
 | Feature | Status | Notes |
 |---|---|---|
-| Auth.js v5 credentials login + JWT cookie | ✅ | 2 seeded users, role-based proxy |
-| Role-based access on every route | ✅ | Accountant = read/write, Viewer = read-only |
-| Dashboard with live counts | ✅ | Queried directly from Prisma |
-| Invoices list with status filter + search | ✅ | URL-driven filters; deep-linkable |
-| Invoice detail with inline edit + audit log | ✅ | PATCH writes one audit row per changed field |
-| PDF upload (drag/drop, 20MB limit, magic-byte check) | ✅ | Saved to `web/uploads/` |
-| Qwen2.5-VL extraction pipeline | ✅ | Single VLM call, returns six fields as JSON via guided decoding |
-| Vendor upsert via GST number | ✅ | Auto-creates on new GSTIN, increments invoice count on repeat |
-| Duplicate detection | ✅ | `UNIQUE(invoice_number, vendor_id)` returns a friendly P2002 message |
-| CSV + XLSX export of filtered view | ✅ | Date range + status filters |
+| Auth.js v5 credentials + JWT | ✅ | 2 seeded users; quick-login chips on `/login` |
+| Role-based access | ✅ | Accountant = read/write · Viewer = read-only |
+| Dashboard with live counts | ✅ | Total POs · Pending (since X) · Completed · Revenue |
+| Invoice list with filters | ✅ | URL-driven, deep-linkable |
+| Inline editing + audit trail | ✅ | One audit row per changed field |
+| PDF upload (20MB, magic-byte) | ✅ | Saved to `web/uploads/` |
+| Qwen2.5-VL extraction | ✅ | Six fields per invoice, JSON output |
+| Vendor upsert via GSTIN | ✅ | Auto-creates new vendors |
+| Duplicate detection | ✅ | `UNIQUE(invoice_number, vendor_id)` with friendly P2002 message |
+| CSV + XLSX export | ✅ | Filtered view |
+| Light + dark mode | ✅ | `prefers-color-scheme`, OKLCH palette |
 
-## What's deliberately deferred
+## Deferred
 
-| Out of demo scope | Lives in upgrade path |
+| Out of demo scope | Path forward |
 |---|---|
 | MinIO / S3 storage | Adapter behind `web/lib/storage.ts` |
-| Redis + Celery for the pipeline | `runPipeline` is structured to drop into a worker |
-| WebSocket live updates | Replaced with 800ms polling |
-| Multi-page PDF support | Qwen reads page 1 only |
-| Buyer name extraction | Hardcoded to "BuildCo Infra Pvt Ltd" — most GST invoices put it in inconsistent positions |
+| Redis + Celery worker | `runPipeline` already in the shape of a worker task |
+| WebSocket live updates | Currently 800ms polling |
+| Multi-page PDFs | VLM reads page 1 only |
+| Fine-tuned Donut / LayoutLMv3 | Wait until ~500 labeled invoices exist |
 
 ---
 
-## Project layout
+## Design system
 
-```
-.
-├── docs/                          PRD / architecture / agent spec
-├── po-dashboard.jsx               Phase 0 POC reference
-├── archive/ocr-service/           Phase 1 Tesseract sidecar (no longer deployed)
-│
-├── modal-vlm/                     Qwen2.5-VL-7B-AWQ on Modal L4
-│   ├── app.py                     Modal app + FastAPI /extract endpoint
-│   ├── requirements.txt
-│   └── README.md
-│
-├── web/                           Next.js 16 (frontend + API + DB)
-│   ├── app/
-│   │   ├── (app)/                 Authenticated shell (sidebar + topbar)
-│   │   │   ├── dashboard/
-│   │   │   ├── invoices/[id]/
-│   │   │   ├── upload/
-│   │   │   └── vendors/[id]/template/  (legacy — orphaned after VLM swap)
-│   │   ├── login/                 Public
-│   │   └── api/
-│   │       ├── auth/[...nextauth]/
-│   │       ├── invoices/
-│   │       │   ├── upload/        POST PDF
-│   │       │   ├── export/        CSV / XLSX
-│   │       │   └── [id]/
-│   │       │       ├── route.ts   GET / PATCH
-│   │       │       └── job/       polling endpoint
-│   │       └── vendors/[id]/template/  (legacy)
-│   ├── lib/
-│   │   ├── db.ts                  Prisma client singleton
-│   │   ├── ocr.ts                 HTTP client → Modal VLM
-│   │   ├── storage.ts             Local-disk adapter (swap for S3)
-│   │   ├── pipeline.ts            Single-stage VLM orchestrator
-│   │   └── extraction/            Legacy template matcher (kept for parse.ts utilities)
-│   ├── components/                Shared UI (Sidebar, Topbar, Icons, badges, editors)
-│   ├── prisma/
-│   │   ├── schema.prisma          PostgreSQL
-│   │   └── seed.ts                Idempotent demo data
-│   ├── auth.ts                    Auth.js v5 (NextAuth) config
-│   ├── auth.config.ts             Edge-safe slice (no DB)
-│   ├── proxy.ts                   Route gating (renamed from middleware.ts in Next 16)
-│   └── uploads/                   PDFs land here (gitignored)
-│
-└── render.yaml                    Blueprint for Render: web service + env vars
-```
+Documented in [`.impeccable.md`](.impeccable.md). Concept: **annual report meets shopfloor ledger** — calm, precise, trustworthy. Restrained typography hierarchy with confident moments of contrast.
 
----
-
-## Upgrade path
-
-Every piece below has a clean swap point — replace the implementation, not the call sites.
-
-### Local file storage → MinIO / S3
-
-Replace `web/lib/storage.ts`'s `saveUploadedPdf` with a presigned-PUT to MinIO or a direct `PutObject` call. The pipeline reads bytes from disk before calling Modal — change it to fetch from S3 instead.
-
-### In-process pipeline → Celery / queue worker
-
-`web/lib/pipeline.ts` is structured so the function body becomes a worker task verbatim. The upload route currently does `runPipeline(inv.id).catch(...)` — swap that for an enqueue call. The job-status endpoint already polls the DB, so no client changes needed.
-
-### Qwen2.5-VL-7B-AWQ → fine-tuned Donut / LayoutLMv3
-
-Once BuildCo has 500+ labeled invoices, swap `modal-vlm/app.py` for a fine-tuned Donut or LayoutLMv3 model on the same Modal infrastructure. The HTTP contract (`/extract` → six-field JSON) stays the same; only the model loader and inference call change.
-
-### Auth.js JWT → SSO / OIDC
-
-Add an OIDC provider to `auth.ts`. The session shape (`{ id, email, role }`) stays the same — every consumer of `auth()` is unchanged.
-
-### Polling → WebSockets
-
-Replace the 800ms `fetch` in `web/app/(app)/upload/UploadClient.tsx` with a WebSocket subscription. The pipeline already writes status to the DB at every stage.
+- **Public Sans** — body and UI
+- **Vollkorn** (italic) — display, one editorial moment per page
+- **JetBrains Mono** — numbers, codes, labels, status (`font-variant-numeric: tabular-nums` everywhere)
+- Palette in **OKLCH**, neutrals tinted ~3° toward the amber accent for cohesion
+- Light mode by default; dark mode via `prefers-color-scheme: dark`
 
 ---
 
 ## Troubleshooting
 
-**`Could not reach Modal VLM at <URL>`**
-The Modal app isn't deployed, or `MODAL_VLM_URL` is wrong. Run `cd modal-vlm && modal deploy app.py` and paste the printed URL into `web/.env` / Render env.
+**`Could not reach Modal VLM at <URL>`** — the Modal app isn't deployed or `MODAL_VLM_URL` is wrong. Run `cd modal-vlm && python -m modal deploy app.py` and paste the printed URL.
 
-**`Modal VLM returned 401`**
-`MODAL_AUTH_TOKEN` on the web side doesn't match the secret on Modal. Verify:
-```
-modal secret list                       # shows po-automation-secrets
-modal secret get po-automation-secrets  # prints the values
-```
-Then check `web/.env` and Render's env tab match.
+**`Modal VLM returned 401`** — `MODAL_AUTH_TOKEN` on the web side doesn't match the Modal secret. Verify with `python -m modal secret list` and re-paste into Render / `web/.env`.
 
-**First upload is slow (~30s)**
-Expected — Modal L4 container is cold and loading Qwen weights from the Volume. Subsequent uploads on the warm container are ~5–10s. Containers spin down after 5 min idle (configurable in `app.py`).
+**First upload is slow (~60s)** — expected. L4 container is cold and loading Qwen weights from the Modal Volume. Subsequent uploads on the warm container are ~10s.
 
-**Login redirects in a loop**
-Make sure `AUTH_SECRET` is set. The seed script must also have run — `npm run db:seed`.
+**Login redirect loops** — `AUTH_SECRET` not set, or `AUTH_URL` is missing on Render (some Auth.js code paths need an explicit URL — set `AUTH_URL=https://po-automation-i7xr.onrender.com`).
 
-**`Already uploaded — invoice X from Y was processed on Z`**
-Working as designed — schema has `UNIQUE (invoice_number, vendor_id)` for duplicate detection (PRD §5.2). Use a fresh PDF or `SEED_RESET=true npm run db:seed` to reset.
+**`Already uploaded — invoice X from Y was processed on Z`** — working as designed. Schema has `UNIQUE (invoice_number, vendor_id)` for duplicate detection (PRD §5.2). Use a fresh PDF or `SEED_RESET=true npm run db:seed`.
 
 ---
 
-*See `docs/build.md` for the full phased delivery plan, `docs/agent.md` for the original OCR pipeline spec (now superseded by the Qwen-VL approach).*
+## Phased build
+
+| Phase | Scope | Status |
+|---|---|---|
+| **0** | Static React POC with dummy data | ✅ `po-dashboard.jsx` |
+| **1** | Tesseract OCR + template matching, SQLite, local | ✅ archived |
+| **2** | Postgres + Supabase + Render + Auth.js | ✅ shipped |
+| **3** | Qwen2.5-VL on Modal, drop template-matching | ✅ shipped |
+| **4** | S3/R2 storage, multi-page PDFs, fine-tuned model | ⏳ when needed |
+
+See [`docs/build.md`](docs/build.md) for the full phased delivery plan and [`docs/agent.md`](docs/agent.md) for the original OCR pipeline spec (superseded by the VLM approach).
+
+---
+
+## License
+
+Internal demo for BuildCo Infra. Not licensed for redistribution.
