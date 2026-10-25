@@ -4,8 +4,6 @@
 
 Internal tool that replaces manual GST-invoice data entry. A Vision-Language Model (Qwen2.5-VL-7B) reads the invoice image directly and returns the six canonical fields — no per-vendor template setup, no OCR-and-regex stage.
 
-<video src="https://raw.githubusercontent.com/Shawn2110/PO-Automation/main/docs/media/po-automation-demo.mp4" poster="docs/media/po-automation-demo.jpg" controls muted playsinline width="100%"></video>
-
 | | |
 |---|---|
 | **Live demo** | <https://po-automation-i7xr.onrender.com> |
@@ -16,6 +14,10 @@ Internal tool that replaces manual GST-invoice data entry. A Vision-Language Mod
 ---
 
 ## Demo
+
+<a href="https://github.com/Shawn2110/PO-Automation/blob/main/docs/media/po-automation-demo.mp4"><img src="docs/media/po-automation-demo.jpg" alt="PO Automation in 20 seconds: drop a GST invoice PDF, six fields extracted, vendor created from the GSTIN, audit log and export" width="100%"></a>
+
+<sub>▶ Click the image to watch the 20-second demo video.</sub>
 
 Open the live URL and sign in with one of the seeded accounts (or click a quick-login chip on the landing page):
 
