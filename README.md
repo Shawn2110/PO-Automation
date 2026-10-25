@@ -15,9 +15,9 @@ Internal tool that replaces manual GST-invoice data entry. A Vision-Language Mod
 
 ## Demo
 
-<a href="https://github.com/Shawn2110/PO-Automation/blob/main/docs/media/po-automation-demo.mp4"><img src="docs/media/po-automation-demo.jpg" alt="PO Automation in 20 seconds: drop a GST invoice PDF, six fields extracted, vendor created from the GSTIN, audit log and export" width="100%"></a>
+<a href="https://github.com/Shawn2110/PO-Automation/blob/main/docs/media/po-automation-demo.mp4"><img src="docs/media/po-automation-demo.gif" alt="PO Automation in 20 seconds: drop a GST invoice PDF, six fields extracted, vendor created from the GSTIN, audit log and export" width="100%"></a>
 
-<sub>▶ Click the image to watch the 20-second demo video.</sub>
+<sub>▶ Click the animation for the full-quality mp4 with sound.</sub>
 
 Open the live URL and sign in with one of the seeded accounts (or click a quick-login chip on the landing page):
 
